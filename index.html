@@ -53,17 +53,17 @@ const clusterGroup = L.markerClusterGroup({
 }).addTo(map);
 
 /////////////////////////////////////////////////////
-// TOOLTIP FUNCTION
+// TOOLTIP (MATCHES GRAFANA DATA)
 /////////////////////////////////////////////////////
 
-function buildTooltip(row){
+function buildTooltip(r){
   return `
-    <b>Ticket:</b> ${row.TicketNumber ?? "N/A"}<br>
-    <b>Location:</b> ${row.LocationName ?? "N/A"}<br>
-    <b>Classification:</b> ${row.ClassificationName ?? "N/A"}<br>
-    <b>Status:</b> ${row.IncidentStatus ?? "N/A"}<br>
-    <b>Lat:</b> ${row.Lat}<br>
-    <b>Long:</b> ${row.Longitude}
+    <b>Ticket:</b> ${r.ticket ?? "N/A"}<br>
+    <b>Location:</b> ${r.state ?? "N/A"}<br>
+    <b>Classification:</b> ${r.classification ?? "N/A"}<br>
+    <b>Status:</b> ${r.status ?? "N/A"}<br>
+    <b>Lat:</b> ${r.lat}<br>
+    <b>Long:</b> ${r.long}
   `;
 }
 
@@ -77,11 +77,21 @@ function renderMarkers(rows){
 
   rows.forEach(r => {
 
-    if(!r.Lat || !r.Longitude) return;
+    if(!r.lat || !r.long) return;
 
-    const marker = L.marker([r.Lat, r.Longitude]);
+    const marker = L.marker([r.lat, r.long]);
 
     marker.bindTooltip(buildTooltip(r));
+
+    // 🔥 SEND CLICK BACK TO GRAFANA
+    marker.on("click", () => {
+      window.parent.postMessage({
+        type: "mapClick",
+        state: r.state,
+        lat: r.lat,
+        long: r.long
+      }, "*");
+    });
 
     clusterGroup.addLayer(marker);
 
@@ -90,7 +100,7 @@ function renderMarkers(rows){
 }
 
 /////////////////////////////////////////////////////
-// GROUPED DISTRICTS
+// DISTRICT TREE SETUP
 /////////////////////////////////////////////////////
 
 const colors = {
@@ -114,7 +124,7 @@ const grouped = {
 const boundaryLayer = L.layerGroup();
 
 /////////////////////////////////////////////////////
-// LOAD GEOJSON (DISTRICTS)
+// LOAD DISTRICTS
 /////////////////////////////////////////////////////
 
 fetch("districts.geojson")
@@ -142,20 +152,16 @@ fetch("districts.geojson")
       layer: districtLayer
     });
 
-    const b = L.geoJSON(feature, {
-      style: {
-        color: "black",
-        weight: 1,
-        fillOpacity: 0
-      }
-    });
-
-    boundaryLayer.addLayer(b);
+    boundaryLayer.addLayer(
+      L.geoJSON(feature, {
+        style: {
+          color: "black",
+          weight: 1,
+          fillOpacity: 0
+        }
+      })
+    );
   });
-
-  /////////////////////////////////////////////////////
-  // TREE CONTROL
-  /////////////////////////////////////////////////////
 
   const overlaysTree = {
     label: 'Districts by Municipality',
@@ -195,21 +201,27 @@ fetch("districts.geojson")
 });
 
 /////////////////////////////////////////////////////
-// RECEIVE GRAFANA DATA
+// RECEIVE DATA FROM GRAFANA
 /////////////////////////////////////////////////////
 
 window.addEventListener("message", (event) => {
+
+  console.log("📩 Received:", event.data); // debug
 
   if (
     event.data?.type === "incidentData" &&
     Array.isArray(event.data.data)
   ) {
-
     renderMarkers(event.data.data);
-
   }
 
 });
+
+/////////////////////////////////////////////////////
+// INFORM GRAFANA THAT MAP IS READY
+/////////////////////////////////////////////////////
+
+window.parent.postMessage({ type: "iframeReady" }, "*");
 
 </script>
 
