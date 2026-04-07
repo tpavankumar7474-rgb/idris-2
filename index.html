@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+
+<meta charset="utf-8"/>
+<title>Incident GIS Map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css"/>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet.control.layers.tree@1.1.0/L.Control.Layers.Tree.css"/>
+<script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+<script src="https://unpkg.com/leaflet.control.layers.tree@1.1.0/L.Control.Layers.Tree.js"></script>
+
+<style>
+html,body{height:100%;margin:0;}
+#map{height:100vh;}
+</style>
+
+</head>
+
+<body>
+<div id="map"></div>
+
+<script>
+
+/////////////////////////////////////////////////////
+// MAP
+/////////////////////////////////////////////////////
+
+const map = L.map("map").setView([26.25,50.05],10);
+
+const osm = L.tileLayer(
+  "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+  { attribution:"© OpenStreetMap" }
+).addTo(map);
+
+/////////////////////////////////////////////////////
+// LAYERS
+/////////////////////////////////////////////////////
+
+const municipalityLayer = L.geoJSON(null);
+const districtLayer = L.geoJSON(null);
+const boundaryLayer = L.layerGroup();
+
+const clusterGroup = L.markerClusterGroup({
+  chunkedLoading:true,
+  maxClusterRadius:50
+}).addTo(map);
+
+/////////////////////////////////////////////////////
+// GROUPING (for tree)
+/////////////////////////////////////////////////////
+
+const grouped = {
+  "Dammam": [],
+  "Al Khobar": [],
+  "Dhahran": []
+};
+
+/////////////////////////////////////////////////////
+// COLORS
+/////////////////////////////////////////////////////
+
+function getColor(count){
+  if(count > 50) return "red";
+  if(count > 20) return "orange";
+  if(count > 0) return "yellow";
+  return "gray";
+}
+
+/////////////////////////////////////////////////////
+// TOOLTIP
+/////////////////////////////////////////////////////
+
+function tooltipHTML(d){
+  return `
+  <b>${d.district || "N/A"}</b><br>
+  Count: ${d.count ?? 0}<br>
+  Status: ${d.status ?? "N/A"}
+  `;
+}
+
+/////////////////////////////////////////////////////
+// BUILD TREE CONTROL
+/////////////////////////////////////////////////////
+
+function buildTree(){
+
+  const overlaysTree = {
+    label:"Layers",
+    children:[
+      { label:"Municipalities", layer:municipalityLayer },
+      {
+        label:"Districts by Municipality",
+        children:[
+          { label:"Dammam", children:grouped["Dammam"] },
+          { label:"Al Khobar", children:grouped["Al Khobar"] },
+          { label:"Dhahran", children:grouped["Dhahran"] }
+        ]
+      },
+      { label:"Boundary", layer:boundaryLayer },
+      { label:"Incidents", layer:clusterGroup }
+    ]
+  };
+
+  L.control.layers.tree(
+    { "OSM": osm },
+    overlaysTree,
+    { collapsed:false }
+  ).addTo(map);
+}
+
+/////////////////////////////////////////////////////
+// MAIN RENDER FROM QUERY
+/////////////////////////////////////////////////////
+
+function renderAll(data){
+
+  // reset
+  municipalityLayer.clearLayers();
+  districtLayer.clearLayers();
+  boundaryLayer.clearLayers();
+  clusterGroup.clearLayers();
+
+  grouped["Dammam"] = [];
+  grouped["Al Khobar"] = [];
+  grouped["Dhahran"] = [];
+
+  /////////////////////////////////////////////////////
+  // MUNICIPALITIES
+  /////////////////////////////////////////////////////
+
+  if(data.municipalities){
+    municipalityLayer.addData(data.municipalities);
+  }
+
+  /////////////////////////////////////////////////////
+  // DISTRICTS (WITH QUERY DATA)
+  /////////////////////////////////////////////////////
+
+  if(data.districts){
+
+    data.districts.features.forEach(f=>{
+
+      const city = f.properties.City;
+      const name = f.properties.Name;
+      const count = f.properties.count ?? 0;
+      const status = f.properties.status ?? "N/A";
+
+      const layer = L.geoJSON(f,{
+        style:{
+          color:"black",
+          weight:1,
+          fillColor:getColor(count),
+          fillOpacity:0.6
+        }
+      }).bindTooltip(`
+        <b>${name}</b><br>
+        City: ${city}<br>
+        Count: ${count}<br>
+        Status: ${status}
+      `);
+
+      if(grouped[city]){
+        grouped[city].push({
+          label:`${name} (${count})`,
+          layer:layer
+        });
+      }
+
+      boundaryLayer.addLayer(
+        L.geoJSON(f,{
+          style:{color:"black",weight:1,fillOpacity:0}
+        })
+      );
+
+    });
+
+  }
+
+  /////////////////////////////////////////////////////
+  // INCIDENT MARKERS
+  /////////////////////////////////////////////////////
+
+  if(data.incidents){
+
+    data.incidents.forEach(r=>{
+
+      if(!r.lat || !r.long) return;
+
+      const marker = L.marker([r.lat, r.long]);
+      marker.bindTooltip(tooltipHTML(r));
+      clusterGroup.addLayer(marker);
+
+    });
+
+  }
+
+  /////////////////////////////////////////////////////
+  // FIT MAP
+  /////////////////////////////////////////////////////
+
+  if(municipalityLayer.getBounds().isValid()){
+    map.fitBounds(municipalityLayer.getBounds());
+  }
+
+  /////////////////////////////////////////////////////
+  // BUILD TREE
+  /////////////////////////////////////////////////////
+
+  buildTree();
+}
+
+/////////////////////////////////////////////////////
+// RECEIVE DATA FROM GRAFANA
+/////////////////////////////////////////////////////
+
+window.addEventListener("message",(event)=>{
+
+  if(event.data?.type === "mapData"){
+
+    renderAll(event.data.data);
+
+  }
+
+});
+
+</script>
+
+</body>
+</html>
