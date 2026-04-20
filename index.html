@@ -47,13 +47,11 @@ html, body { margin:0; padding:0; height:100%; }
 
 <script defer>
 document.addEventListener("DOMContentLoaded", function () {
-
   if (typeof L === "undefined") {
     alert("Leaflet not loaded");
     return;
   }
 
-  // ---------------- MAP ----------------
   const map = L.map("map").setView([26.42, 50.09], 11);
 
   const osm = L.tileLayer(
@@ -61,43 +59,40 @@ document.addEventListener("DOMContentLoaded", function () {
     { attribution: "&copy; OpenStreetMap contributors" }
   ).addTo(map);
 
-  // ---------------- STORAGE ----------------
-  let municipalityGroups = {};
-  let municipalityColors = {};
-  let districtCenters = {};
-  let districtNameToCity = {};
-
   const districtCountLayer = L.layerGroup().addTo(map);
   const boundaryLayer = L.layerGroup();
 
-  // ---------------- COLORS ----------------
-  const defaultColors = [
+  let municipalityGroups = {};
+  let municipalityColors = {};
+  let treeControl = null;
+
+  const colors = [
     "#2563eb", "#dc2626", "#16a34a", "#9333ea",
     "#ea580c", "#0891b2", "#4f46e5", "#ca8a04",
     "#be123c", "#0f766e"
   ];
 
   function getColor(index) {
-    return defaultColors[index % defaultColors.length];
+    return colors[index % colors.length];
   }
 
-  // ---------------- RENDER COUNTS FROM QUERY ----------------
-  // Query columns expected:
-  // 0 = LocationName
-  // 1 = TotalCount
-  // 2 = Lat
-  // 3 = Longitude
+  function normalizeCityName(city) {
+    if (!city) return "Unknown";
+    const c = String(city).trim();
+    const lower = c.toLowerCase();
+
+    if (lower === "dammam" || c === "الدمام") return "Dammam";
+    if (lower === "dhahran" || c === "الظهران") return "Dhahran";
+    if (lower === "al khobar" || lower === "khobar" || c === "الخبر") return "Al Khobar";
+
+    return c;
+  }
+
   function renderDistrictCounts(rows) {
     districtCountLayer.clearLayers();
 
     rows.forEach((r) => {
-      if (
-        !r ||
-        r.state == null ||
-        r.count == null ||
-        r.lat == null ||
-        r.long == null
-      ) return;
+      if (!r || r.state == null || r.count == null || r.lat == null || r.long == null) return;
 
       const marker = L.marker([parseFloat(r.lat), parseFloat(r.long)], {
         icon: L.divIcon({
@@ -123,26 +118,82 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // ---------------- LOAD GEOJSON ----------------
+  function buildTreeControl() {
+    if (treeControl) {
+      map.removeControl(treeControl);
+    }
+
+    const municipalityChildren = Object.keys(municipalityGroups)
+      .sort()
+      .map(city => ({
+        label: city,
+        selectAllCheckbox: true,
+        children: municipalityGroups[city]
+      }));
+
+    treeControl = L.control.layers.tree(
+      { "OpenStreetMap": osm },
+      {
+        label: "Map Layers",
+        selectAllCheckbox: true,
+        children: [
+          {
+            label: "Municipality",
+            selectAllCheckbox: true,
+            children: municipalityChildren
+          },
+          {
+            label: "Boundary",
+            layer: boundaryLayer
+          },
+          {
+            label: "Location Counts",
+            layer: districtCountLayer
+          }
+        ]
+      },
+      {
+        collapsed: false,
+        namedToggle: true,
+        selectorBack: false
+      }
+    ).addTo(map);
+  }
+
   fetch("./districts.geojson")
     .then(res => res.json())
     .then(data => {
-      const citySet = [...new Set(
-        data.features
+      const features = data.features || [];
+
+      const normalized = features.map(f => {
+        const city = normalizeCityName(f.properties?.City);
+        const name = (f.properties?.Name || "").trim();
+        return {
+          ...f,
+          properties: {
+            ...f.properties,
+            City: city,
+            Name: name
+          }
+        };
+      });
+
+      const allCities = [...new Set(
+        normalized
           .map(f => f.properties.City)
           .filter(Boolean)
       )].sort();
 
-      citySet.forEach((city, idx) => {
+      allCities.forEach((city, idx) => {
         municipalityGroups[city] = [];
         municipalityColors[city] = getColor(idx);
       });
 
-      data.features.forEach(f => {
+      normalized.forEach(f => {
         const city = f.properties.City;
         const name = f.properties.Name;
 
-        if (!city || !name || !municipalityGroups[city]) return;
+        if (!city || !name) return;
 
         const geo = L.geoJSON(f, {
           style: {
@@ -152,9 +203,6 @@ document.addEventListener("DOMContentLoaded", function () {
             fillOpacity: 0.35
           }
         }).bindTooltip(`${name} (${city})`);
-
-        districtCenters[name] = geo.getBounds().getCenter();
-        districtNameToCity[name] = city;
 
         municipalityGroups[city].push({
           label: name,
@@ -172,46 +220,20 @@ document.addEventListener("DOMContentLoaded", function () {
         );
       });
 
-      const municipalityChildren = Object.keys(municipalityGroups).map(city => ({
-        label: city,
-        children: municipalityGroups[city]
-      }));
-
-      L.control.layers.tree(
-        { "OpenStreetMap": osm },
-        {
-          label: "Map Layers",
-          children: [
-            {
-              label: "Municipality",
-              children: municipalityChildren
-            },
-            {
-              label: "Boundary",
-              layer: boundaryLayer
-            },
-            {
-              label: "Location Counts",
-              layer: districtCountLayer
-            }
-          ]
-        },
-        {
-          collapsed: false
-        }
-      ).addTo(map);
+      console.log("Municipalities loaded:", Object.keys(municipalityGroups));
+      buildTreeControl();
     })
     .catch(err => {
-      console.error("Error loading GeoJSON:", err);
+      console.error("Error loading districts.geojson:", err);
     });
 
-  // ---------------- GRAFANA DATA ----------------
-  // Accept only query columns:
-  // LocationName, TotalCount, Lat, Longitude
+  // Accept only 4 query columns from Grafana:
+  // state = LocationName
+  // count = TotalCount
+  // lat   = Lat
+  // long  = Longitude
   window.addEventListener("message", (event) => {
     if (event.data?.type === "incidentData") {
-      console.log("📩 Data received:", event.data.data);
-
       const rows = (event.data.data || []).map(row => ({
         state: row.state,
         count: row.count,
@@ -223,9 +245,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   });
 
-  // ---------------- READY ----------------
   window.parent.postMessage({ type: "iframeReady" }, "*");
-
 });
 </script>
 </body>
