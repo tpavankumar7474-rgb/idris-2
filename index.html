@@ -36,6 +36,29 @@ html, body { margin:0; padding:0; height:100%; }
   white-space: nowrap;
   text-align: center;
 }
+
+.custom-select-control {
+  background: white;
+  padding: 8px;
+  border-radius: 6px;
+  box-shadow: 0 1px 5px rgba(0,0,0,0.3);
+}
+
+.custom-select-control button {
+  display: block;
+  width: 100%;
+  margin: 4px 0;
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  border-radius: 4px;
+}
+
+.custom-select-control button:hover {
+  background: #f3f4f6;
+}
 </style>
 </head>
 
@@ -64,6 +87,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
   let municipalityGroups = {};
   let municipalityColors = {};
+  let allDistrictLayers = [];
   let treeControl = null;
 
   const colors = [
@@ -118,6 +142,47 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
+  function selectAllDistricts() {
+    allDistrictLayers.forEach(layer => {
+      if (!map.hasLayer(layer)) {
+        map.addLayer(layer);
+      }
+    });
+  }
+
+  function clearAllDistricts() {
+    allDistrictLayers.forEach(layer => {
+      if (map.hasLayer(layer)) {
+        map.removeLayer(layer);
+      }
+    });
+  }
+
+  const SelectControl = L.Control.extend({
+    options: { position: "topright" },
+    onAdd: function () {
+      const div = L.DomUtil.create("div", "custom-select-control");
+      div.innerHTML = `
+        <button id="selectAllDistrictsBtn">Select All Districts</button>
+        <button id="clearAllDistrictsBtn">Clear All Districts</button>
+      `;
+
+      L.DomEvent.disableClickPropagation(div);
+
+      setTimeout(() => {
+        const selectBtn = div.querySelector("#selectAllDistrictsBtn");
+        const clearBtn = div.querySelector("#clearAllDistrictsBtn");
+
+        if (selectBtn) selectBtn.onclick = selectAllDistricts;
+        if (clearBtn) clearBtn.onclick = clearAllDistricts;
+      }, 0);
+
+      return div;
+    }
+  });
+
+  map.addControl(new SelectControl());
+
   function buildTreeControl() {
     if (treeControl) {
       map.removeControl(treeControl);
@@ -127,7 +192,6 @@ document.addEventListener("DOMContentLoaded", function () {
       .sort()
       .map(city => ({
         label: city,
-        selectAllCheckbox: true,
         children: municipalityGroups[city]
       }));
 
@@ -135,11 +199,9 @@ document.addEventListener("DOMContentLoaded", function () {
       { "OpenStreetMap": osm },
       {
         label: "Map Layers",
-        selectAllCheckbox: true,
         children: [
           {
             label: "Municipality",
-            selectAllCheckbox: true,
             children: municipalityChildren
           },
           {
@@ -179,9 +241,7 @@ document.addEventListener("DOMContentLoaded", function () {
       });
 
       const allCities = [...new Set(
-        normalized
-          .map(f => f.properties.City)
-          .filter(Boolean)
+        normalized.map(f => f.properties.City).filter(Boolean)
       )].sort();
 
       allCities.forEach((city, idx) => {
@@ -209,6 +269,8 @@ document.addEventListener("DOMContentLoaded", function () {
           layer: geo
         });
 
+        allDistrictLayers.push(geo);
+
         boundaryLayer.addLayer(
           L.geoJSON(f, {
             style: {
@@ -220,18 +282,12 @@ document.addEventListener("DOMContentLoaded", function () {
         );
       });
 
-      console.log("Municipalities loaded:", Object.keys(municipalityGroups));
       buildTreeControl();
     })
     .catch(err => {
       console.error("Error loading districts.geojson:", err);
     });
 
-  // Accept only 4 query columns from Grafana:
-  // state = LocationName
-  // count = TotalCount
-  // lat   = Lat
-  // long  = Longitude
   window.addEventListener("message", (event) => {
     if (event.data?.type === "incidentData") {
       const rows = (event.data.data || []).map(row => ({
