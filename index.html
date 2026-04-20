@@ -2,27 +2,39 @@
 <html>
 <head>
 <meta charset="utf-8" />
-<title>Districts + Cluster Map</title>
+<title>District Map + Grafana</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css"/>
-<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css"/>
-<script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
-
 <link rel="stylesheet" href="https://unpkg.com/leaflet.control.layers.tree@1.1.0/L.Control.Layers.Tree.css"/>
-<script src="https://unpkg.com/leaflet.control.layers.tree@1.1.0/L.Control.Layers.Tree.js"></script>
 
 <style>
 html, body { margin:0; padding:0; height:100%; }
 #map { width:100%; height:100vh; }
 
 .leaflet-control-layers {
-  max-height:80vh;
-  overflow:auto;
-  font-size:14px;
+  max-height: 80vh;
+  overflow: auto;
+  font-size: 13px;
+}
+
+.count-label {
+  background: transparent;
+  border: none;
+}
+
+.count-text {
+  font-size: 16px;
+  font-weight: bold;
+  color: #111;
+  text-shadow:
+    1px 1px 0 #fff,
+   -1px -1px 0 #fff,
+    1px -1px 0 #fff,
+   -1px 1px 0 #fff,
+    0 0 4px #fff;
+  white-space: nowrap;
+  text-align: center;
 }
 </style>
 </head>
@@ -30,200 +42,191 @@ html, body { margin:0; padding:0; height:100%; }
 <body>
 <div id="map"></div>
 
-<script>
+<script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script defer src="https://unpkg.com/leaflet.control.layers.tree@1.1.0/L.Control.Layers.Tree.js"></script>
 
-/////////////////////////////////////////////////////
-// MAP INIT
-/////////////////////////////////////////////////////
+<script defer>
+document.addEventListener("DOMContentLoaded", function () {
 
-const map = L.map('map').setView([26.42, 50.09], 11);
-
-const osm = L.tileLayer(
-  'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  { attribution: '&copy; OpenStreetMap contributors' }
-).addTo(map);
-
-/////////////////////////////////////////////////////
-// CLUSTER GROUP
-/////////////////////////////////////////////////////
-
-const clusterGroup = L.markerClusterGroup({
-  chunkedLoading: true,
-  maxClusterRadius: 50
-}).addTo(map);
-
-/////////////////////////////////////////////////////
-// TOOLTIP (MATCHES GRAFANA DATA)
-/////////////////////////////////////////////////////
-
-function buildTooltip(r){
-  return `
-    <b>Ticket:</b> ${r.ticket ?? "N/A"}<br>
-    <b>Location:</b> ${r.state ?? "N/A"}<br>
-    <b>Classification:</b> ${r.classification ?? "N/A"}<br>
-    <b>Status:</b> ${r.status ?? "N/A"}<br>
-    <b>Lat:</b> ${r.lat}<br>
-    <b>Long:</b> ${r.long}
-  `;
-}
-
-/////////////////////////////////////////////////////
-// RENDER MARKERS
-/////////////////////////////////////////////////////
-
-function renderMarkers(rows){
-
-  clusterGroup.clearLayers();
-
-  rows.forEach(r => {
-
-    if(!r.lat || !r.long) return;
-
-    const marker = L.marker([r.lat, r.long]);
-
-    marker.bindTooltip(buildTooltip(r));
-
-    // 🔥 SEND CLICK BACK TO GRAFANA
-    marker.on("click", () => {
-      window.parent.postMessage({
-        type: "mapClick",
-        state: r.state,
-        lat: r.lat,
-        long: r.long
-      }, "*");
-    });
-
-    clusterGroup.addLayer(marker);
-
-  });
-
-}
-
-/////////////////////////////////////////////////////
-// DISTRICT TREE SETUP
-/////////////////////////////////////////////////////
-
-const colors = {
-  "Dammam": "blue",
-  "Al Khobar": "red",
-  "Dhahran": "green"
-};
-
-const municipalityCodes = {
-  "Dammam": "10501",
-  "Al Khobar": "10506",
-  "Dhahran": "10513"
-};
-
-const grouped = {
-  "Dammam": [],
-  "Al Khobar": [],
-  "Dhahran": []
-};
-
-const boundaryLayer = L.layerGroup();
-
-/////////////////////////////////////////////////////
-// LOAD DISTRICTS
-/////////////////////////////////////////////////////
-
-fetch("districts.geojson")
-.then(r => r.json())
-.then(data => {
-
-  data.features.forEach(feature => {
-
-    const city = feature.properties.City;
-    const name = feature.properties.Name;
-
-    if (!grouped[city]) return;
-
-    const districtLayer = L.geoJSON(feature, {
-      style: {
-        color: "black",
-        weight: 1,
-        fillColor: colors[city] || "gray",
-        fillOpacity: 0.55
-      }
-    }).bindTooltip(`${name} (${city})`);
-
-    grouped[city].push({
-      label: name,
-      layer: districtLayer
-    });
-
-    boundaryLayer.addLayer(
-      L.geoJSON(feature, {
-        style: {
-          color: "black",
-          weight: 1,
-          fillOpacity: 0
-        }
-      })
-    );
-  });
-
-  const overlaysTree = {
-    label: 'Districts by Municipality',
-    children: [
-      {
-        label: `Dammam (${municipalityCodes["Dammam"]})`,
-        selectAllCheckbox: true,
-        children: grouped["Dammam"]
-      },
-      {
-        label: `Al Khobar (${municipalityCodes["Al Khobar"]})`,
-        selectAllCheckbox: true,
-        children: grouped["Al Khobar"]
-      },
-      {
-        label: `Dhahran (${municipalityCodes["Dhahran"]})`,
-        selectAllCheckbox: true,
-        children: grouped["Dhahran"]
-      },
-      {
-        label: "District Boundary",
-        layer: boundaryLayer
-      },
-      {
-        label: "Incidents (Cluster)",
-        layer: clusterGroup
-      }
-    ]
-  };
-
-  L.control.layers.tree(
-    { "OpenStreetMap": osm },
-    overlaysTree,
-    { collapsed: false }
-  ).addTo(map);
-
-});
-
-/////////////////////////////////////////////////////
-// RECEIVE DATA FROM GRAFANA
-/////////////////////////////////////////////////////
-
-window.addEventListener("message", (event) => {
-
-  console.log("📩 Received:", event.data); // debug
-
-  if (
-    event.data?.type === "incidentData" &&
-    Array.isArray(event.data.data)
-  ) {
-    renderMarkers(event.data.data);
+  if (typeof L === "undefined") {
+    alert("Leaflet not loaded");
+    return;
   }
 
+  // ---------------- MAP ----------------
+  const map = L.map("map").setView([26.42, 50.09], 11);
+
+  const osm = L.tileLayer(
+    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    { attribution: "&copy; OpenStreetMap contributors" }
+  ).addTo(map);
+
+  // ---------------- STORAGE ----------------
+  let municipalityGroups = {};
+  let municipalityColors = {};
+  let districtCenters = {};
+  let districtNameToCity = {};
+
+  const districtCountLayer = L.layerGroup().addTo(map);
+  const boundaryLayer = L.layerGroup();
+
+  // ---------------- COLORS ----------------
+  const defaultColors = [
+    "#2563eb", "#dc2626", "#16a34a", "#9333ea",
+    "#ea580c", "#0891b2", "#4f46e5", "#ca8a04",
+    "#be123c", "#0f766e"
+  ];
+
+  function getColor(index) {
+    return defaultColors[index % defaultColors.length];
+  }
+
+  // ---------------- RENDER COUNTS FROM QUERY ----------------
+  // Query columns expected:
+  // 0 = LocationName
+  // 1 = TotalCount
+  // 2 = Lat
+  // 3 = Longitude
+  function renderDistrictCounts(rows) {
+    districtCountLayer.clearLayers();
+
+    rows.forEach((r) => {
+      if (
+        !r ||
+        r.state == null ||
+        r.count == null ||
+        r.lat == null ||
+        r.long == null
+      ) return;
+
+      const marker = L.marker([parseFloat(r.lat), parseFloat(r.long)], {
+        icon: L.divIcon({
+          className: "count-label",
+          html: `<div class="count-text">${r.count}</div>`,
+          iconSize: [40, 20],
+          iconAnchor: [20, 10]
+        })
+      });
+
+      marker.bindTooltip(`<b>${r.state}</b><br>Total: ${r.count}`);
+
+      marker.on("click", () => {
+        window.parent.postMessage({
+          type: "mapClick",
+          state: r.state,
+          lat: r.lat,
+          long: r.long
+        }, "*");
+      });
+
+      districtCountLayer.addLayer(marker);
+    });
+  }
+
+  // ---------------- LOAD GEOJSON ----------------
+  fetch("./districts.geojson")
+    .then(res => res.json())
+    .then(data => {
+      const citySet = [...new Set(
+        data.features
+          .map(f => f.properties.City)
+          .filter(Boolean)
+      )].sort();
+
+      citySet.forEach((city, idx) => {
+        municipalityGroups[city] = [];
+        municipalityColors[city] = getColor(idx);
+      });
+
+      data.features.forEach(f => {
+        const city = f.properties.City;
+        const name = f.properties.Name;
+
+        if (!city || !name || !municipalityGroups[city]) return;
+
+        const geo = L.geoJSON(f, {
+          style: {
+            color: "black",
+            weight: 1,
+            fillColor: municipalityColors[city],
+            fillOpacity: 0.35
+          }
+        }).bindTooltip(`${name} (${city})`);
+
+        districtCenters[name] = geo.getBounds().getCenter();
+        districtNameToCity[name] = city;
+
+        municipalityGroups[city].push({
+          label: name,
+          layer: geo
+        });
+
+        boundaryLayer.addLayer(
+          L.geoJSON(f, {
+            style: {
+              color: "black",
+              weight: 1,
+              fillOpacity: 0
+            }
+          })
+        );
+      });
+
+      const municipalityChildren = Object.keys(municipalityGroups).map(city => ({
+        label: city,
+        children: municipalityGroups[city]
+      }));
+
+      L.control.layers.tree(
+        { "OpenStreetMap": osm },
+        {
+          label: "Map Layers",
+          children: [
+            {
+              label: "Municipality",
+              children: municipalityChildren
+            },
+            {
+              label: "Boundary",
+              layer: boundaryLayer
+            },
+            {
+              label: "Location Counts",
+              layer: districtCountLayer
+            }
+          ]
+        },
+        {
+          collapsed: false
+        }
+      ).addTo(map);
+    })
+    .catch(err => {
+      console.error("Error loading GeoJSON:", err);
+    });
+
+  // ---------------- GRAFANA DATA ----------------
+  // Accept only query columns:
+  // LocationName, TotalCount, Lat, Longitude
+  window.addEventListener("message", (event) => {
+    if (event.data?.type === "incidentData") {
+      console.log("📩 Data received:", event.data.data);
+
+      const rows = (event.data.data || []).map(row => ({
+        state: row.state,
+        count: row.count,
+        lat: row.lat,
+        long: row.long
+      }));
+
+      renderDistrictCounts(rows);
+    }
+  });
+
+  // ---------------- READY ----------------
+  window.parent.postMessage({ type: "iframeReady" }, "*");
+
 });
-
-/////////////////////////////////////////////////////
-// INFORM GRAFANA THAT MAP IS READY
-/////////////////////////////////////////////////////
-
-window.parent.postMessage({ type: "iframeReady" }, "*");
-
 </script>
-
 </body>
 </html>
