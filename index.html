@@ -36,29 +36,6 @@ html, body { margin:0; padding:0; height:100%; }
   white-space: nowrap;
   text-align: center;
 }
-
-.custom-select-control {
-  background: white;
-  padding: 8px;
-  border-radius: 6px;
-  box-shadow: 0 1px 5px rgba(0,0,0,0.3);
-}
-
-.custom-select-control button {
-  display: block;
-  width: 100%;
-  margin: 4px 0;
-  padding: 6px 10px;
-  border: 1px solid #ccc;
-  background: #fff;
-  cursor: pointer;
-  font-size: 12px;
-  border-radius: 4px;
-}
-
-.custom-select-control button:hover {
-  background: #f3f4f6;
-}
 </style>
 </head>
 
@@ -82,23 +59,28 @@ document.addEventListener("DOMContentLoaded", function () {
     { attribution: "&copy; OpenStreetMap contributors" }
   ).addTo(map);
 
-  const districtCountLayer = L.layerGroup().addTo(map);
-  const boundaryLayer = L.layerGroup();
+  const boundaryLayer = L.layerGroup().addTo(map);
 
-  let municipalityGroups = {};
-  let municipalityColors = {};
-  let allDistrictLayers = [];
+  // Municipality master groups
+  const municipalityMasterGroups = {
+    "Dammam": L.layerGroup(),
+    "Al Khobar": L.layerGroup(),
+    "Dhahran": L.layerGroup()
+  };
+
+  const municipalityColors = {
+    "Dammam": "#2563eb",
+    "Al Khobar": "#dc2626",
+    "Dhahran": "#16a34a"
+  };
+
+  // district data store
+  const districtLayers = {};       // {districtName: geoLayer}
+  const districtMarkers = {};      // {districtName: textMarker}
+  const districtCityMap = {};      // {districtName: city}
+  const districtCoords = {};       // {districtName: {lat,long,count}}
+
   let treeControl = null;
-
-  const colors = [
-    "#2563eb", "#dc2626", "#16a34a", "#9333ea",
-    "#ea580c", "#0891b2", "#4f46e5", "#ca8a04",
-    "#be123c", "#0f766e"
-  ];
-
-  function getColor(index) {
-    return colors[index % colors.length];
-  }
 
   function normalizeCityName(city) {
     if (!city) return "Unknown";
@@ -112,105 +94,71 @@ document.addEventListener("DOMContentLoaded", function () {
     return c;
   }
 
-  function renderDistrictCounts(rows) {
-    districtCountLayer.clearLayers();
-
-    rows.forEach((r) => {
-      if (!r || r.state == null || r.count == null || r.lat == null || r.long == null) return;
-
-      const marker = L.marker([parseFloat(r.lat), parseFloat(r.long)], {
-        icon: L.divIcon({
-          className: "count-label",
-          html: `<div class="count-text">${r.count}</div>`,
-          iconSize: [40, 20],
-          iconAnchor: [20, 10]
-        })
-      });
-
-      marker.bindTooltip(`<b>${r.state}</b><br>Total: ${r.count}`);
-
-      marker.on("click", () => {
-        window.parent.postMessage({
-          type: "mapClick",
-          state: r.state,
-          lat: r.lat,
-          long: r.long
-        }, "*");
-      });
-
-      districtCountLayer.addLayer(marker);
-    });
+  function createCountMarker(name, lat, long, count) {
+    return L.marker([parseFloat(lat), parseFloat(long)], {
+      icon: L.divIcon({
+        className: "count-label",
+        html: `<div class="count-text">${count}</div>`,
+        iconSize: [40, 20],
+        iconAnchor: [20, 10]
+      })
+    }).bindTooltip(`<b>${name}</b><br>Total: ${count}`);
   }
 
-  function selectAllDistricts() {
-    allDistrictLayers.forEach(layer => {
-      if (!map.hasLayer(layer)) {
-        map.addLayer(layer);
+  function refreshVisibleCounts() {
+    // remove all markers first
+    Object.values(districtMarkers).forEach(marker => {
+      if (map.hasLayer(marker)) {
+        map.removeLayer(marker);
+      }
+    });
+
+    // add count only if district polygon is visible
+    Object.keys(districtLayers).forEach(name => {
+      const polygonLayer = districtLayers[name];
+      const marker = districtMarkers[name];
+
+      if (polygonLayer && marker && map.hasLayer(polygonLayer)) {
+        marker.addTo(map);
       }
     });
   }
 
-  function clearAllDistricts() {
-    allDistrictLayers.forEach(layer => {
-      if (map.hasLayer(layer)) {
-        map.removeLayer(layer);
-      }
-    });
-  }
-
-  const SelectControl = L.Control.extend({
-    options: { position: "topright" },
-    onAdd: function () {
-      const div = L.DomUtil.create("div", "custom-select-control");
-      div.innerHTML = `
-        <button id="selectAllDistrictsBtn">Select All Districts</button>
-        <button id="clearAllDistrictsBtn">Clear All Districts</button>
-      `;
-
-      L.DomEvent.disableClickPropagation(div);
-
-      setTimeout(() => {
-        const selectBtn = div.querySelector("#selectAllDistrictsBtn");
-        const clearBtn = div.querySelector("#clearAllDistrictsBtn");
-
-        if (selectBtn) selectBtn.onclick = selectAllDistricts;
-        if (clearBtn) clearBtn.onclick = clearAllDistricts;
-      }, 0);
-
-      return div;
-    }
-  });
-
-  map.addControl(new SelectControl());
-
-  function buildTreeControl() {
+  function buildTreeControl(cityDistrictNodes) {
     if (treeControl) {
       map.removeControl(treeControl);
     }
 
-    const municipalityChildren = Object.keys(municipalityGroups)
-      .sort()
-      .map(city => ({
-        label: city,
-        children: municipalityGroups[city]
-      }));
-
     treeControl = L.control.layers.tree(
-      { "OpenStreetMap": osm },
+      {
+        "OpenStreetMap": osm
+      },
       {
         label: "Map Layers",
         children: [
           {
             label: "Municipality",
-            children: municipalityChildren
+            children: [
+              {
+                label: "Dammam",
+                layer: municipalityMasterGroups["Dammam"],
+                children: cityDistrictNodes["Dammam"] || []
+              },
+              {
+                label: "Al Khobar",
+                layer: municipalityMasterGroups["Al Khobar"],
+                children: cityDistrictNodes["Al Khobar"] || []
+              },
+              {
+                label: "Dhahran",
+                layer: municipalityMasterGroups["Dhahran"],
+                children: cityDistrictNodes["Dhahran"] || []
+              }
+            ]
           },
           {
             label: "Boundary",
             layer: boundaryLayer
-          },
-          {
-            label: "Location Counts",
-            layer: districtCountLayer
           }
         ]
       },
@@ -225,35 +173,17 @@ document.addEventListener("DOMContentLoaded", function () {
   fetch("./districts.geojson")
     .then(res => res.json())
     .then(data => {
-      const features = data.features || [];
+      const cityDistrictNodes = {
+        "Dammam": [],
+        "Al Khobar": [],
+        "Dhahran": []
+      };
 
-      const normalized = features.map(f => {
+      (data.features || []).forEach(f => {
         const city = normalizeCityName(f.properties?.City);
         const name = (f.properties?.Name || "").trim();
-        return {
-          ...f,
-          properties: {
-            ...f.properties,
-            City: city,
-            Name: name
-          }
-        };
-      });
 
-      const allCities = [...new Set(
-        normalized.map(f => f.properties.City).filter(Boolean)
-      )].sort();
-
-      allCities.forEach((city, idx) => {
-        municipalityGroups[city] = [];
-        municipalityColors[city] = getColor(idx);
-      });
-
-      normalized.forEach(f => {
-        const city = f.properties.City;
-        const name = f.properties.Name;
-
-        if (!city || !name) return;
+        if (!name || !municipalityMasterGroups[city]) return;
 
         const geo = L.geoJSON(f, {
           style: {
@@ -264,12 +194,15 @@ document.addEventListener("DOMContentLoaded", function () {
           }
         }).bindTooltip(`${name} (${city})`);
 
-        municipalityGroups[city].push({
+        districtLayers[name] = geo;
+        districtCityMap[name] = city;
+
+        municipalityMasterGroups[city].addLayer(geo);
+
+        cityDistrictNodes[city].push({
           label: name,
           layer: geo
         });
-
-        allDistrictLayers.push(geo);
 
         boundaryLayer.addLayer(
           L.geoJSON(f, {
@@ -280,25 +213,79 @@ document.addEventListener("DOMContentLoaded", function () {
             }
           })
         );
+
+        geo.on("add remove", function () {
+          setTimeout(refreshVisibleCounts, 50);
+        });
+
+        geo.on("click", function () {
+          const info = districtCoords[name];
+          if (!info) return;
+
+          window.parent.postMessage({
+            type: "mapClick",
+            state: name,
+            lat: info.lat,
+            long: info.long
+          }, "*");
+        });
       });
 
-      buildTreeControl();
+      buildTreeControl(cityDistrictNodes);
+
+      // Start with no municipality selected
+      map.removeLayer(municipalityMasterGroups["Dammam"]);
+      map.removeLayer(municipalityMasterGroups["Al Khobar"]);
+      map.removeLayer(municipalityMasterGroups["Dhahran"]);
     })
     .catch(err => {
       console.error("Error loading districts.geojson:", err);
     });
 
+  // Receive query data from Grafana
+  // expected:
+  // row.state = LocationName
+  // row.count = TotalCount
+  // row.lat = Lat
+  // row.long = Longitude
   window.addEventListener("message", (event) => {
     if (event.data?.type === "incidentData") {
-      const rows = (event.data.data || []).map(row => ({
-        state: row.state,
-        count: row.count,
-        lat: row.lat,
-        long: row.long
-      }));
+      // clear old markers
+      Object.values(districtMarkers).forEach(marker => {
+        if (map.hasLayer(marker)) map.removeLayer(marker);
+      });
 
-      renderDistrictCounts(rows);
+      for (const key in districtMarkers) delete districtMarkers[key];
+      for (const key in districtCoords) delete districtCoords[key];
+
+      (event.data.data || []).forEach(row => {
+        const name = row.state;
+        const count = row.count;
+        const lat = row.lat;
+        const long = row.long;
+
+        if (name == null || count == null || lat == null || long == null) return;
+
+        districtCoords[name] = {
+          lat: parseFloat(lat),
+          long: parseFloat(long),
+          count: count
+        };
+
+        districtMarkers[name] = createCountMarker(
+          name,
+          parseFloat(lat),
+          parseFloat(long),
+          count
+        );
+      });
+
+      refreshVisibleCounts();
     }
+  });
+
+  map.on("overlayadd overlayremove", function () {
+    setTimeout(refreshVisibleCounts, 50);
   });
 
   window.parent.postMessage({ type: "iframeReady" }, "*");
